@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 from enum import Enum
 from io import BufferedReader
 from mmap import ACCESS_READ, MAP_PRIVATE, mmap
@@ -188,9 +189,15 @@ class ELFError(Exception):
 
 class ELFFile:
     def __init__(self, f: BufferedReader):
-        self.mm = mmap(f.fileno(), 0, access=ACCESS_READ | MAP_PRIVATE)
+        file_size = os.fstat(f.fileno()).st_size
+        print(f"[*] Trying to mmap file: {f.name}, size: {file_size} bytes")  # Add this line
 
-        self.ident = Elf_Eident.from_buffer(self.mm)
+        if file_size == 0:
+            raise ValueError(f"Cannot mmap an empty file: {f.name}")
+
+        self.mm = mmap(f.fileno(), 0, access=ACCESS_READ)
+
+        self.ident = Elf_Eident.from_buffer_copy(self.mm)
 
         if self.ident.ei_mag != MAG:
             raise ELFError('Invalid file')
@@ -201,13 +208,13 @@ class ELFFile:
         self.dyn_cls: type[Elf32_Dyn | Elf64_Dyn]
 
         if self.ident.ei_class == ELFCLASS.CLASS_32:
-            self.ehdr = Elf32_Ehdr.from_buffer(self.mm)
+            self.ehdr = Elf32_Ehdr.from_buffer_copy(self.mm)
             self.shdr_cls = Elf32_Shdr
             self.phdr_cls = Elf32_Phdr
             self.dyn_cls = Elf32_Dyn
             self.bits = 32
         elif self.ident.ei_class == ELFCLASS.CLASS_64:
-            self.ehdr = Elf64_Ehdr.from_buffer(self.mm)
+            self.ehdr = Elf64_Ehdr.from_buffer_copy(self.mm)
             self.shdr_cls = Elf64_Shdr
             self.phdr_cls = Elf64_Phdr
             self.dyn_cls = Elf64_Dyn
@@ -218,7 +225,7 @@ class ELFFile:
     def iter_sections(self, kind: Optional[SHT] = None):
         offset = self.ehdr.e_shoff
         for _ in range(self.ehdr.e_shnum):
-            shdr = self.shdr_cls.from_buffer(self.mm, offset)
+            shdr = self.shdr_cls.from_buffer_copy(self.mm, offset)
             offset += self.ehdr.e_shentsize
 
             if kind is None or shdr.sh_type == kind:
@@ -228,14 +235,14 @@ class ELFFile:
         offset = shdr.sh_offset
         end = shdr.sh_offset + shdr.sh_size
         while offset < end:
-            dyn = self.dyn_cls.from_buffer(self.mm, offset)
+            dyn = self.dyn_cls.from_buffer_copy(self.mm, offset)
             offset += shdr.sh_entsize
             yield dyn
 
     def iter_segments(self, kind: Optional[PT] = None):
         offset = self.ehdr.e_phoff
         for _ in range(self.ehdr.e_phnum):
-            phdr = self.phdr_cls.from_buffer(self.mm, offset)
+            phdr = self.phdr_cls.from_buffer_copy(self.mm, offset)
             offset += self.ehdr.e_phentsize
 
             if kind is None or phdr.p_type == kind:
